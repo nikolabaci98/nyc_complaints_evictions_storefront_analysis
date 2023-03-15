@@ -1,0 +1,495 @@
+---
+title: "Uncovering the Realities of NYC: A Data-Driven Analysis of Complaints, Evictions, and Storefront Vacancies in the Big Apple"
+author: "Nikola Baci"
+date: "2023-03-08"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list=ls())
+gc()
+directory <- "C:\\Users\\nikolabaci\\Desktop\\DATA712\\a2"
+setwd(directory)
+set.seed(100)
+
+
+library(tidyverse)
+library(lubridate)
+library(sf)
+```
+## Introduction
+
+This paper provides an analysis of three data sets from the NYC Open Data program to explore the relationships between building complaints, evictions, and storefront vacancy rates from 2019-2021 in the New York City (NYC) area. This analysis can be used by city officials and real estate professionals to make informed decisions about policies and investments to address building complaints, evictions, and storefront vacancies in the NYC area. 
+
+In the report we aggregate the data based on zip code and year and performs linear regression analysis to understand the trends and patterns. The paper begins by introducing the data sets and the specific columns that will be used. It also outlines the assumptions made and the limitations of the data. The paper then presents the findings from the analysis, including histograms, heatmaps, and tables, to provide insights into the patterns and trends of building complaints, evictions, and storefront vacancies in the NYC area. Finally we build a linear regression model to pin down the relationship between number of complaints with number of evictions and vacancies.
+
+
+## Data
+
+In this analysis I will be using three data sets provided by the NYC Open Data 
+program.
+
+The first data set is provided by Department of Building where we can find all the
+complaints entered in the system. These complaints where filed with 311 and there
+are 3.3 million complaints as of March 13, 2023. Additionally, the data set has 
+15 columns, but we will be focusing only on the column that holds the year and 
+zip code data. You can view or download the data set [here](https://data.cityofnewyork.us/Housing-Development/DOB-Complaints-Received/eabe-havv).
+
+The second data set is provided by the New York City Marshals where we find 
+information on pending, scheduled, and executed evictions in the five boroughs 
+from 2017 to the present. As of now, the data set has 72K rows and 20 columns, but as with 
+the DOB data set we will only be using the column that hold the year and zip code
+data. You can view of download the data [here](https://data.cityofnewyork.us/City-Government/Evictions/6z8x-wfk4).
+
+The third data set provided by an online portal which allows owners to provide 
+information about ground and second floor storefronts on their properties complying
+with Local Law 157. To date the data set has 214K rows and 24 columns. You can view of download the data [here](https://data.cityofnewyork.us/City-Government/Storefronts-Reported-Vacant-or-Not/92iy-9c3n).
+This data set however only track records as of December 31 of each year. Meaning
+owners report if the store was vacant or not as f the end of the year. Keep in mind
+a store could have been vacant for only a few days before reporting or a long time vacant
+store could get occupied a few days before reporting.
+
+All three data sets will be aggregated to show the total sum of complaints,
+evictions, and vacant vs non vacant storefronts respectively. The aggregated 
+information will be based on the year and zip code. The year will be limited
+between 2019 and 2021 (3 years) while the zip codes will be limited on the NYC
+(5 boroughs) area.
+
+The aggregated data will be put together in on data frame and linear regression
+analysis will be performed. To enable uniform and reliable merging of the tables
+I will be using a zip code data set that I have obtained for the NY state.
+
+The data sets are in a good condition with very few missing values and
+proper documentation to help understand the columns. It is worth noting that
+the aggregated data is not exhaustive and so when we merge them we notice missing
+values. This happens when in year y and zip code x there have been complaints filed
+with the DOB but there were no evictions (for the same y-x combination).
+
+Here we also make the assumption that is a (year-zip) combination does not appear
+on the data set, then no complaints or evictions then the count is zero.
+
+
+```{r dob-complaint, include=FALSE}
+# this takes some time since there are 3.3M rows
+
+dob_orig <- read.csv("dob.csv") #read NYPD complaints data set
+names(dob_orig) <- tolower(gsub("[.]", "_", names(dob_orig))) #change the column names to lowercase
+dob_orig$date_entered <- mdy(dob_orig$date_entered) #convert when complaint was made column to date
+dob_orig$zip_code <- as.integer(dob_orig$zip_code) #convert when complaint was made column to date
+
+```
+
+```{r read complaints, include=FALSE}
+
+#Store data is only since 2019 so I will limit the other data sets from 2019 to 2021
+
+dob_sub <-  dob_orig %>%
+  filter(date_entered >= "2019-01-01", date_entered <= "2021-12-31") #800K complaints
+
+```
+
+
+```{r read zipcodes, include=FALSE}
+zipcodes <- read.csv("zipcodes.csv")
+
+names(zipcodes) <- tolower(gsub("[.]", "_", names(zipcodes)))
+zipcodes <- rename(zipcodes, city = common_cities)
+zipcodes <- select(zipcodes, -type)
+```
+
+
+```{r wrangle complaints, include=FALSE}
+#we observe zip codes that are outside the NYC area
+#so we merge with the 'zipcode' dataset and only keep the 4 boroughs
+
+dob_sub <- dob_sub %>%
+  left_join(zipcodes, by = "zip_code")
+
+#Nassau, Schenectady and Westchester counties should be removed
+table(dob_sub$county)
+
+#Get only NYC zip and a subset of all columns
+dob_sub <- dob_sub %>%
+  filter(county %in% c("Queens County", "Bronx County","Kings County", "Richmond County", "New York County")) %>%
+  select(complaint_number, status, date_entered, zip_code, disposition_code, county)
+
+
+#main interest is on zip code and date
+#let's check the validity of these columns
+
+#no missing report dates
+sum(is.na(dob_sub$date_entered)) 
+
+#check min and max dates
+summary(dob_sub$date_entered) 
+
+sum(is.na(dob_sub$zip_code)) #29 NA zip codes
+
+#entries that have NA zip codes seem to be legit with just the zip code missing
+#we can drop those entries since they are only 20 out of 800K entries
+dob_sub %>%
+  filter(is.na(zip_code))
+
+#check zip
+summary(dob_sub$zip_code) 
+
+```
+
+## Anlaysis
+
+### DOB Complaint Analysis
+
+Below we create an histogram chart to show the distribution of complaints received 
+from 2019-2021.
+
+```{r include=FALSE}
+#visualize the distribution of complaints over time
+dob_sub %>%
+  ggplot() +
+  geom_histogram(aes(x = date_entered)) +
+  xlab("Year") +
+  ylab("Frequency") +
+  labs(title = "Distribution of DOB Complaints 2019-2021")+
+  theme_bw() 
+
+freq <- dob_sub %>%
+  group_by(year(date_entered)) %>%
+  summarise(count = n())
+```
+
+As you can see, the levels of complaints for each month range from 10,000 to
+30,000+ per month in all of NYC. It is quite noticeable by the humps of the chart
+that the number of complaints tends to go up during the summer months. 
+
+Although it might seem like 2020 was the year with the far fewer complaints,
+crunching the numbers shows that in fact there is not big difference as the table
+below suggests.
+
+|Year |Count     |
+|-----|----------|
+|2019 |   309,490|
+|2020 |   257,502|
+|2021 |   257,046|
+
+
+
+```{r include=FALSE}
+
+#Num zip in dataset = 228
+length(unique(dob_sub$zip_code))
+
+#228 out 338 or 67.5% of NYC zip codes are present
+length(unique(dob_sub$zip_code)) / nrow(filter(zipcodes, county %in% c("Queens County", "Bronx County","Kings County", "Richmond County", "New York County") )) 
+
+#Subset by each year
+dob19 <- dob_sub%>%
+  filter(year(date_entered) == 2019)
+dob20 <- dob_sub%>%
+  filter(year(date_entered) == 2020)
+dob21 <- dob_sub%>%
+  filter(year(date_entered) == 2021)
+
+#only zip that appears in 2019, 2020, 2021
+#199 zips appear across all years
+zip <- as.list(intersect(dob19$zip_code, intersect(dob21$zip_code, dob20$zip_code)))
+
+```
+
+Thur further analysis, we find that over all three years there are three 
+neighborhood that make the cut for the top 5 most complaints and consequently 
+the top 5 overall:
+
+|zip   |borough   |neighborhood|
+|------|----------|------------|
+|11221 |Brooklyn  |Bushwick    |
+|11226 |Brooklyn  |Flatbush    |
+|11385 |Queens    |Ridgewood   |
+
+
+```{r include=FALSE}
+
+#Num of complaints by each zip
+dob_count <- dob_sub %>%
+  group_by(year(date_entered), zip_code) %>%
+  summarise(complaints = n())
+
+top_2019 <- dob_count %>%
+  filter(`year(date_entered)` == 2019) %>%
+  arrange(desc(complaints)) %>%
+  top_n(5)
+
+top_2020 <- dob_count %>%
+  filter(`year(date_entered)` == 2020) %>%
+  arrange(desc(complaints)) %>%
+  top_n(5)
+
+top_2021 <- dob_count %>%
+  filter(`year(date_entered)` == 2021) %>%
+  arrange(desc(complaints)) %>%
+  top_n(5)
+
+top_overall <- dob_count %>%
+  group_by(zip_code) %>%
+  summarize(count = sum(complaints)) %>%
+  arrange(desc(count)) %>%
+  top_n(5)
+```
+Below we take an eagle's eye view of the whole NYC area using a heatmap
+where each zip code is colored depending on the total number of complaints for
+the given year.
+```{r include=FALSE}
+
+#Rename the summarized column
+dob_count <- rename(dob_count, year = `year(date_entered)`)
+
+#Get the zip boundaries
+nyc_zipshape <- st_read("ZIP_CODE_040114.shp")
+names(nyc_zipshape)[1] <- paste("zip_code")
+nyc_zipshape$zip_code <- as.integer(nyc_zipshape$zip_code)
+
+dob_map <- dob_count %>% 
+  left_join(nyc_zipshape, by = "zip_code")
+
+```
+
+```{r echo=FALSE}
+#Create map
+dob_map %>%
+  ggplot() +
+  geom_sf(aes(fill = complaints, geometry = geometry)) +
+  scale_fill_gradient(
+    limits = c(1, 5000),
+    low = "green", high = "red",
+    breaks = seq(from = 500, to = 4500, by = 500)
+  ) +
+  facet_wrap(~ year) +
+  theme_bw() +
+  theme(axis.line = element_blank(), 
+        axis.text = element_blank())
+  
+```
+
+From the maps we notice that Brooklyn and west-Queens stand out compared to other boroughs with a medium to
+high number of complaints. The reasons why are unknown at this time and further
+investigation is necessary.
+
+### Evictions Analysis
+
+Let's break eviction data set down and understand its content. In the NYC
+area we are dealing with 27,455 evictions across all 5 boroughs. The tables
+below paint a quick picture about those evictions. 
+
+- Table 1: the court ruled in ejectment of 18 or 0.08% of evictions cases.
+- Table 2: 90% of eviction cases are residential
+
+Further analysis shows that out of the 17 ejectments only 1 was commercial, the 
+rest was residential.
+
+```{r include=FALSE}
+evictions_orig <- read.csv("eviction.csv")
+names(evictions_orig) <- tolower(gsub("[.]", "_", names(evictions_orig)))
+evictions_orig <- rename(evictions_orig, zip_code = eviction_postcode)
+evictions_orig$executed_date <- mdy(evictions_orig$executed_date) #convert when complaint was made column to date
+
+```
+
+```{r include=FALSE}
+eviction_subs <-  evictions_orig %>%
+  filter(executed_date >= "2019-01-01", executed_date <= "2021-12-31") %>%
+  select(executed_date, zip_code, ejectment, latitude, longitude, court_index_number, residential_commercial)
+
+colSums(is.na(eviction_subs)) #only 2.6K lat and long data points are missing
+
+eviction_subs %>%
+  group_by(ejectment) %>%
+  summarise(count = n())
+
+eviction_subs %>%
+  group_by(residential_commercial) %>%
+  summarise(count = n())
+
+eviction_subs %>%
+  group_by(residential_commercial, ejectment) %>%
+  summarise(count = n())
+
+```
+Table 1                 
+|Action      |Count |
+|------------|------|
+|Ejectment   |    18|
+|No Ejectment|22,387|   
+
+Table 2
+|Type        |Count |
+|------------|------|
+|Commercial  |  2145|
+|Residential | 20260|
+
+
+
+```{r include=FALSE}
+eviction_count <- eviction_subs %>%
+  group_by(year(executed_date), zip_code) %>%
+  summarise(eviction = n())
+
+eviction_count <- rename(eviction_count, year = `year(executed_date)`)
+```
+The map below, similar to the complaints map, is showing a geographical distribution
+of the evictions separated by year. It appears that Bronx and Brooklyn account for
+the majority of the evictions in 2019, however this number goes down in '20-'21.
+This could the result of the Covid-19 pandemic at time when NYC took [strict measures
+to protect tenants](https://hcr.ny.gov/covid-19-eviction-protections-tenants).
+
+The zip codes that have no evictions are removed from the map.
+
+```{r include=FALSE}
+#Get the zip boundaries
+nyc_zipshape <- st_read("ZIP_CODE_040114.shp")
+names(nyc_zipshape)[1] <- paste("zip_code")
+nyc_zipshape$zip_code <- as.integer(nyc_zipshape$zip_code)
+
+eviction_map <- eviction_count %>% 
+  left_join(nyc_zipshape, by = "zip_code")
+```
+
+```{r echo=FALSE}
+#Create map
+eviction_map %>%
+  ggplot() +
+  geom_sf(aes(fill = eviction, geometry = geometry)) +
+  scale_fill_gradient(
+    limits = c(1, 600),
+    low = "green", high = "red",
+    breaks = seq(from = 100, to = 500, by = 100),
+    na.value = "black"
+  ) +
+  facet_wrap(~ year) +
+  theme_bw() +
+  theme(axis.line = element_blank(), 
+        axis.text = element_blank())
+```
+
+### Storefront Analysis
+
+
+
+```{r include=FALSE}
+
+store_orig <-  read.csv("storefronts.csv")
+names(store_orig) <- tolower(gsub("[.]", "_", names(store_orig)))
+store_orig$reporting_year <- substr(store_orig$reporting_year, 0, 5) #data as '2019 and 2020', keep only first year
+store_orig$reporting_year = as.integer(store_orig$reporting_year)
+store_orig$zip_code <- as.integer(store_orig$zip_code) #convert when complaint was made column to date
+
+```
+
+```{r include=FALSE}
+colSums(is.na(store_orig)) #1.1K have missing zipcodes
+
+store_sub <- store_orig %>%
+  filter(!is.na(zip_code))
+
+
+store_sub %>% 
+  group_by(reporting_year, vacant_on_12_31) %>%
+  summarise(count = n())
+```
+The table below shows a quick summery of the total count of reports, the respective
+numbers for vacant and not vacant storefronts as well as a calculated ration
+between those two numbers.
+
+
+|Year  |Count |Vacant |Non Vacant|Ratio Vacant:Non Vacant|
+|------|------|-------|----------|-----------------------|
+|2019  | 75250|   6940|     68310|                   1:10|
+|2020  | 74469|   8428|     66041|                    1:8|
+|2021  | 63409|   6598|     56811|                    1:9|
+
+We notice that in 2021 we had about 10,000 reports fewer than the previous years.
+And as some of you might expect, there were more stores empty during the pandemic
+bringing the ration down to 1:8 (for every 8 stores non vacant, you find a vacant 
+store).
+
+
+```{r include=FALSE}
+store_sub %>%
+  #filter(reporting_year == 2019) %>%
+  mutate(yes = ifelse(vacant_on_12_31 == "YES", 1, 0)) %>%
+  mutate(no = ifelse(vacant_on_12_31 == "NO", 1, 0)) %>%
+  group_by(primary_business_activity) %>%
+  summarise(Count = n(), Vacant = sum(yes), `Not Vacant` = sum(no)) %>%
+  rename(Business = primary_business_activity) %>%
+  arrange(desc(Vacant)) %>%
+  top_n(5)
+```
+
+|Business	                        |Count  |	Vacant|	Not Vacant|
+|---------------------------------|---------------------------|
+|RETAIL	                          |60881	|216	  |60665      |
+|OTHER	                          |33744	|133	  |33611      |
+|FOOD SERVICES                    |41226	|126    |41100      |
+|MISCELLANEOUS OTHER SERVICE	    |15174  |56     |15118      |
+|HEALTH CARE or SOCIAL ASSISTANCE	|8427	  |24     |8403       |
+
+```{r include=FALSE}
+store_count <- store_orig %>%
+  filter(zip_code > 10000) %>%
+  mutate(vacant = ifelse(vacant_on_12_31 == "YES", 1, 0), not_vacant = ifelse(vacant_on_12_31 == "NO", 1, 0)) %>%
+  group_by(reporting_year, zip_code) %>%
+  summarise(vacant = sum(vacant), not_vacant = sum(not_vacant), vacant_percent = vacant / (vacant + not_vacant)) %>%
+  mutate(reporting_year = as.integer(reporting_year))
+
+store_count <- rename(store_count, year = reporting_year)
+```
+
+
+## Linear Regression Model
+
+In this analysis we will investigate if there is a relationship between 
+complaints received in a zip code with the percent of vacant stores and eviction.
+
+To do this, we use Ordinary Least Square (OLS) linear regression model that will
+fit the line in such a way as to minimize the total difference of each point from
+the line hence the name OLS.
+
+```{r include=FALSE}
+#joining all tables
+
+df <- dob_count %>%
+  full_join(eviction_count, by = c("year", "zip_code")) %>%
+  full_join(store_count, by = c("year", "zip_code"))
+
+df <- df %>% replace(is.na(.), 0)
+```
+
+Because of dimensionality we cannot show a graphical illustration of the model.
+The model shows that for each additional eviction a zip code area in NYC goes up
+by 5 complaints and for each additional vacant store the zip code has there are
+11 more complaints in the neighborhood.
+
+Both those findings are statistically significant since the p-value or the likelihood
+that we would see such a result is negligible. 
+
+It is important to note that just because there is a concurrence we have limited 
+information to imply causation. This means vacant storefronts does not make people
+file more complaints with the DOB, rather it happens that when the number of vacant
+storefronts is high so is the number of complaints.
+
+```{r echo=FALSE}
+reg_1 <- lm(df$complaints ~ df$eviction + df$vacant, data = df)
+summary(reg_1)
+```
+
+## Conclusion
+In conclusion, this analysis of building complaints, evictions, and storefront vacancies in the NYC area has provided valuable insights into the patterns and trends from 2019-2021. The analysis shows that building complaints tend to increase during the summer months, and that certain neighborhoods in Brooklyn and Queens have higher numbers of complaints. The analysis also shows that most of the eviction cases are residential, and the majority of the evictions occur in the Bronx and Brooklyn. Finally, the analysis reveals that storefront vacancies are concentrated in certain neighborhoods, and that the vacancy rate has remained more or less the same.
+
+
+
+
+
+
+
+
+
