@@ -3,7 +3,7 @@
 In this repo you will find the code and all the files that you need to reproduce the finding of my paper. 
 
 The csv files are quite large so here is where you can find the files:
-- (Storefronts Data)[https://data.cityofnewyork.us/City-Government/Evictions/6z8x-wfk4]
+- [Storefronts Data](https://data.cityofnewyork.us/City-Government/Evictions/6z8x-wfk4)
 - (Eviction Data)[https://data.cityofnewyork.us/City-Government/Storefronts-Reported-Vacant-or-Not/92iy-9c3n]
 - (DOB 311 Complaints)[https://data.cityofnewyork.us/Housing-Development/DOB-Complaints-Received/eabe-havv]
 
